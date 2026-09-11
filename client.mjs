@@ -107,6 +107,7 @@ window.__ModuleLoader__.load({
 			},
 			details: { fontSize: "0.72rem", opacity: 0.6 },
 			separator: { borderTop: "1px solid var(--dsh-border, rgba(127,127,127,0.2))" },
+			list: { display: "flex", flexDirection: "column", gap: "0.25rem" },
 		};
 
 		/**
@@ -124,6 +125,14 @@ window.__ModuleLoader__.load({
 			const [notice, setNotice] = React.useState(null);
 			const [restarting, setRestarting] = React.useState(false);
 			const [showLog, setShowLog] = React.useState(false);
+			// The plugin half of the page: the manifest's report, the last (or
+			// running) plugin update, and its log.
+			const [plugins, setPlugins] = React.useState(null);
+			const [pluginRun, setPluginRun] = React.useState(null);
+			const [pluginLog, setPluginLog] = React.useState("");
+			const [pluginPending, setPluginPending] = React.useState("");
+			const [pluginRestarting, setPluginRestarting] = React.useState(false);
+			const [showPluginLog, setShowPluginLog] = React.useState(false);
 			const alive = React.useRef(true);
 
 			React.useEffect(() => () => { alive.current = false }, []);
@@ -159,7 +168,53 @@ window.__ModuleLoader__.load({
 				return () => { cancelled = true };
 			}, []);
 
+			// First paint, plugin side: what the manifest says and whether a
+			// plugin update is already in flight. No check here — that asks
+			// every plugin's remote, so it is a button.
+			React.useEffect(() => {
+				let cancelled = false;
+				void (async () => {
+					try {
+						const value = await call("plugins", { lines: 0 });
+						if (cancelled) return;
+						setPlugins(value);
+						setPluginRun(value.run ?? null);
+						setPluginLog(value.log ?? "");
+						if (value.run !== null && value.run !== undefined && value.run.state === "running") {
+							setPluginRestarting(true);
+						}
+					} catch (error) {
+						if (!cancelled) setFailure(error.message);
+					}
+				})();
+				return () => { cancelled = true };
+			}, []);
+
 			const running = run !== null && run !== undefined && run.state === "running";
+			const pluginRunning = pluginRun !== null && pluginRun !== undefined && pluginRun.state === "running";
+
+			// Same watch as the harness run, for the plugin run: the unit
+			// restarts dsh-web at the end, so a failed call here means "not back
+			// yet", not "broken".
+			React.useEffect(() => {
+				if (!pluginRunning && !pluginRestarting) return undefined;
+				let cancelled = false;
+				const tick = async () => {
+					try {
+						const value = await call("plugins", { lines: 80 });
+						if (cancelled) return;
+						setPlugins(value);
+						setPluginRun(value.run);
+						setPluginLog(value.log ?? "");
+						setPluginRestarting(false);
+					} catch {
+						if (!cancelled) setPluginRestarting(true);
+					}
+				};
+				const id = setInterval(() => { void tick() }, POLL_MS);
+				void tick();
+				return () => { cancelled = true; clearInterval(id) };
+			}, [pluginRunning, pluginRestarting]);
 
 			// While an update runs, watch its progress record and log. A failed
 			// call here is expected rather than exceptional: the harness
@@ -232,6 +287,25 @@ window.__ModuleLoader__.load({
 				if (value.error !== null && value.error !== undefined) setFailure(value.error);
 			});
 
+			const checkPlugins = () => act("plugins-check", async () => {
+				const value = await call("pluginsCheck", {});
+				setPlugins((current) => ({ ...(current ?? {}), report: value }));
+			});
+
+			const updatePlugins = () => act("plugins-update", async () => {
+				const value = await call("pluginsUpdate", {});
+				if (value.alreadyRunning === true) {
+					setNotice("A plugin update is already running.");
+					setPluginRestarting(true);
+					return;
+				}
+				setPluginRun({ state: "running", phase: "starting", message: "asking systemd to run the plugin updater…" });
+				setPluginRestarting(true);
+				setNotice(value.via === "systemd"
+					? "Plugin update started. This page reconnects on its own when the harness restarts."
+					: value.warning ?? "Plugin update started.");
+			});
+
 			if (status === null) {
 				return React.createElement("div", { style: styles.wrap },
 					React.createElement("p", { style: styles.hint }, failure ?? "Reading the update state…"));
@@ -247,6 +321,22 @@ window.__ModuleLoader__.load({
 			}
 
 			const available = report !== null && report.ok === true && report.updateAvailable === true;
+			// The plugin report lives inside the last "plugins" answer, so a
+			// check and a run update the same piece of state.
+			const pluginReport = plugins === null || plugins === undefined ? null : plugins.report ?? null;
+			const pluginEntries = pluginReport !== null && Array.isArray(pluginReport.entries) ? pluginReport.entries : [];
+			const pluginUpdateAvailable = pluginReport !== null && pluginReport.updateAvailable === true;
+			const pluginUnit = plugins === null || plugins === undefined ? "dsh-plugins.service" : plugins.unit ?? "dsh-plugins.service";
+			const pluginBusy = pluginPending !== "" || pluginRunning;
+			const pluginLine = () => {
+				if (pluginReport === null) return null;
+				if (pluginReport.ok !== true) {
+					return React.createElement("span", { style: styles.error }, `Check failed: ${pluginReport.error ?? "unknown reason"}`);
+				}
+				return React.createElement(pluginUpdateAvailable ? "span" : "span",
+					{ style: pluginUpdateAvailable ? styles.status : styles.good },
+					pluginUpdateAvailable ? "updates available" : "all current");
+			};
 			const target = report === null ? undefined : report.target;
 			const busy = pending !== "" || running;
 			const buttonStyle = (extra) => ({ ...styles.button, ...extra, ...(busy ? styles.busy : {}) });
@@ -335,6 +425,54 @@ window.__ModuleLoader__.load({
 						status.timer === "unavailable" ? " — no systemd user session here, so the button runs the updater detached" : ""),
 					notice === null ? null : React.createElement("div", { style: styles.status }, notice),
 					failure === null ? null : React.createElement("div", { style: styles.error }, failure)),
+
+				React.createElement("div", { style: styles.card },
+					React.createElement("div", { style: styles.row },
+						React.createElement("span", { style: styles.key }, "Plugins"),
+						React.createElement("span", { style: styles.value },
+							pluginReport === null
+								? "check to see what the manifest installs"
+								: `${pluginEntries.length} declared`),
+						React.createElement("span", { style: styles.hint }, "· from plugins.conf and the machine-local plugins.local.conf")),
+					pluginEntries.length === 0
+						? null
+						: React.createElement("div", { style: styles.list },
+							pluginEntries.map((entry) => React.createElement("div", { key: entry.name, style: styles.row },
+								React.createElement("span", { style: { ...styles.value, ...styles.mono } }, entry.name),
+								React.createElement("span", { style: entry.installed === true ? styles.status : styles.error },
+									entry.installed !== true
+										? "not installed"
+										: entry.updateAvailable === true
+											? `${entry.current ?? "?"} → ${entry.latest ?? "?"}`
+											: `${entry.current ?? "?"} (current)`),
+								entry.note === null || entry.note === undefined
+									? null
+									: React.createElement("span", { style: styles.hint }, `· ${entry.note}`)))),
+					React.createElement("div", { style: styles.actions },
+						React.createElement("button", {
+							type: "button", style: buttonStyle(), disabled: pluginBusy, onClick: checkPlugins,
+						}, pluginPending === "plugins-check" ? "Checking…" : "Check plugins"),
+						React.createElement("button", {
+							type: "button",
+							style: buttonStyle(pluginUpdateAvailable ? styles.primary : {}),
+							disabled: pluginBusy, onClick: updatePlugins,
+						}, pluginPending === "plugins-update" ? "Starting…" : "Update plugins"),
+						pluginLine()),
+					React.createElement("div", { style: styles.hint },
+						`updates run as ${pluginUnit}: pull each checkout, refresh the profile layer, restart`),
+					pluginRun === null || pluginRun === undefined ? null : React.createElement("div", { style: { ...styles.card, gap: "0.5rem", border: "none", padding: 0 } },
+						React.createElement("div", { style: styles.row },
+							React.createElement("span", { style: styles.key }, "Last plugin run"),
+							React.createElement("span", { style: pluginRun.state === "failed" ? styles.error : pluginRun.state === "running" ? styles.status : styles.good },
+								`${pluginRun.state}${pluginRun.phase === undefined ? "" : ` — ${pluginRun.phase}`}`,
+								pluginRun.message === undefined ? "" : `: ${pluginRun.message}`),
+							pluginRestarting ? React.createElement("span", { style: styles.hint }, "waiting for the harness to come back…") : null),
+						React.createElement("div", { style: styles.actions },
+							React.createElement("button", {
+								type: "button", style: styles.button,
+								onClick: () => { setShowPluginLog((current) => !current) },
+							}, showPluginLog ? "Hide log" : "Show log")),
+						showPluginLog && pluginLog.length > 0 ? React.createElement("pre", { style: styles.pre }, pluginLog) : null)),
 
 				runBlock(),
 

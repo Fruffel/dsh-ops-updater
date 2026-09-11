@@ -36,6 +36,18 @@ const REPORT = {
   checkedAt: '2026-01-02T03:04:06Z',
 }
 
+/** The plugin check report the fake dsh-plugins.sh prints. */
+const PLUGIN_REPORT = {
+  ok: true,
+  pluginsDir: '/tmp/plugins',
+  updateAvailable: true,
+  unmanaged: 0,
+  entries: [
+    { name: 'dsh-ops-updater', url: 'https://example.invalid/dsh-ops-updater.git', ref: null, source: 'plugins.conf', directory: '/tmp/plugins/dsh-ops-updater', installed: true, current: 'cbe8093', latest: 'aaaaaaa', updateAvailable: true, note: null },
+  ],
+  checkedAt: '2026-01-02T03:04:06Z',
+}
+
 /** One endpoint call as the browser half makes it. */
 let root
 let logLines
@@ -45,6 +57,27 @@ function fakeCheckout() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ops-updater-'))
   mkdirSync(join(dir, 'bin'), { recursive: true })
   mkdirSync(join(dir, 'harness', 'state'), { recursive: true })
+  const pluginScript = join(dir, 'bin', 'dsh-plugins.sh')
+  writeFileSync(pluginScript, `#!/usr/bin/env bash
+if [ "\${1:-}" = "--check" ]; then
+  printf '%s\\n' '${JSON.stringify(PLUGIN_REPORT)}'
+  exit 0
+fi
+printf '%s\\n' "fake plugin updater ran" >> ${JSON.stringify(join(dir, 'harness', 'state', 'plugins.log'))}
+`, 'utf8')
+  chmodSync(pluginScript, 0o755)
+  writeFileSync(join(dir, 'harness', 'state', 'plugins.json'), JSON.stringify({
+    state: 'ok',
+    phase: 'done',
+    message: '2 plugin(s) already current',
+    pid: 999999999,
+    startedAt: '2026-01-02T02:00:00Z',
+    finishedAt: '2026-01-02T02:00:03Z',
+    updatedAt: '2026-01-02T02:00:03Z',
+    entries: [{ name: 'dsh-ops-updater', url: 'https://example.invalid/x.git', action: 'keep', ok: true, detail: 'cbe8093' }],
+  }), 'utf8')
+  writeFileSync(join(dir, 'harness', 'state', 'plugins.log'), 'dsh-plugins: checking\ndsh-plugins: 1 plugin(s) already current\n', 'utf8')
+
   const script = join(dir, 'bin', 'dsh-sync.sh')
   writeFileSync(script, `#!/usr/bin/env bash
 if [ "\${1:-}" = "--check" ]; then
@@ -240,10 +273,45 @@ describe('dsh-ops-updater host half', () => {
     assert.equal(answer.error.code, 'unknown-endpoint')
   })
 
+  it('reports the plugin run record and log tail', async () => {
+    const call = mount(root)
+    const state = value(await call('plugins', { lines: 1 }))
+    assert.equal(state.found, true)
+    assert.equal(state.unit, 'dsh-plugins.service')
+    assert.equal(state.run.message, '2 plugin(s) already current')
+    assert.equal(state.log, 'dsh-plugins: 1 plugin(s) already current')
+  })
+
+  it('answers the plugin check from the script it runs, verbatim', async () => {
+    const call = mount(root)
+    const report = value(await call('pluginsCheck', {}))
+    for (const [key, expected] of Object.entries(PLUGIN_REPORT)) assert.deepEqual(report[key], expected, key)
+    assert.equal(report.exitCode, 0)
+  })
+
+  it('starts a plugin update when the recorded run is no longer alive', async () => {
+    const call = mount(root)
+    const started = value(await call('pluginsUpdate', {}))
+    assert.equal(started.started, true)
+    assert.ok(started.via === 'systemd' || started.via === 'detached')
+  })
+
+  it('refuses a second plugin update while one is running', async () => {
+    const file = join(root, 'harness', 'state', 'plugins.json')
+    const record = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...record, state: 'running', pid: process.pid }), 'utf8')
+    const call = mount(root)
+    const answer = value(await call('pluginsUpdate', {}))
+    assert.equal(answer.started, false)
+    assert.equal(answer.alreadyRunning, true)
+    writeFileSync(file, JSON.stringify(record), 'utf8')
+  })
+
   it('asks systemd through the stub, never the live user manager', async () => {
     const calls = systemctlCalls()
     assert.ok(calls.length > 0, 'the Host half must reach for systemctl')
-    assert.ok(calls.some(call => call.includes('dsh-update.service')), 'the update unit is named')
+    assert.ok(calls.some(call => call.includes('dsh-update.service')), 'the harness unit is named')
+    assert.ok(calls.some(call => call.includes('dsh-plugins.service')), 'the plugin unit is named')
     assert.ok(calls.every(call => call.startsWith('--user ')), 'every call is a user-manager call')
     // The whole point of the stub: this file must not be able to restart the
     // harness it is running in, whatever the real systemd would have done.

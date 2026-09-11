@@ -78,6 +78,13 @@ export const UPDATE_UNIT = 'dsh-update.service'
 /** The timer that makes updates automatic (03:00 daily). */
 export const AUTO_UNIT = 'dsh-update.timer'
 
+/**
+ * The unit that updates the plugin checkouts. Same shape as the harness one:
+ * it pulls each checkout, refreshes the profile layer, and restarts the harness
+ * from its own cgroup.
+ */
+export const PLUGINS_UNIT = 'dsh-plugins.service'
+
 /** How long one command may take before it is killed. */
 const CHECK_TIMEOUT_MS = 120_000
 const SYSTEMCTL_TIMEOUT_MS = 20_000
@@ -151,6 +158,12 @@ async function dispatch(request, located, log) {
         return json(ok(await startUpdate(located, log)))
       case 'auto':
         return json(ok(await setAutoUpdate(located, body.payload, log)))
+      case 'plugins':
+        return json(ok(await readPluginState(located, body.payload)))
+      case 'pluginsCheck':
+        return json(ok(await checkPlugins(located)))
+      case 'pluginsUpdate':
+        return json(ok(await startPluginsUpdate(located, log)))
       default:
         return json(fail('unknown-endpoint', `dsh-ops-updater: no endpoint named "${endpoint}"`))
     }
@@ -295,10 +308,83 @@ async function checkForUpdate(located) {
  */
 async function readProgress(located, payload) {
   if (located.root === undefined) return { run: null, log: '' }
-  const lines = typeof payload?.lines === 'number' && payload.lines > 0 ? Math.min(payload.lines, 500) : 40
   return {
     run: await readRun(located.root),
-    log: await tail(join(located.root, 'harness', 'state', 'update.log'), lines),
+    log: await tail(join(located.root, 'harness', 'state', 'update.log'), tailLines(payload, 40)),
+  }
+}
+
+/**
+ * The plugin side of the page: what the manifest declares, and the last (or
+ * currently running) plugin update. Reading this touches no network and no
+ * remote — the check below is the part that asks.
+ * @param located - resolved checkout.
+ * @param payload - `{ lines }` to bound the log tail.
+ * @returns the last run record and log tail, plus the manifest's own report
+ *   when a check has already been made in this process.
+ */
+async function readPluginState(located, payload) {
+  if (located.root === undefined) {
+    return { found: false, error: located.error, unit: PLUGINS_UNIT, run: null, log: '' }
+  }
+  const lines = tailLines(payload, 80)
+  return {
+    found: true,
+    script: join(located.root, 'bin', 'dsh-plugins.sh'),
+    manifest: join(located.root, 'plugins.conf'),
+    unit: PLUGINS_UNIT,
+    run: await readJsonFile(join(located.root, 'harness', 'state', 'plugins.json')),
+    log: await tail(join(located.root, 'harness', 'state', 'plugins.log'), lines),
+  }
+}
+
+/**
+ * Ask the manifest whether any plugin checkout is behind its remote. This is
+ * `bin/dsh-plugins.sh --check`, which only queries remotes: it clones nothing
+ * and pulls nothing.
+ * @param located - resolved checkout.
+ * @returns the script's own report, plus the raw exit status.
+ */
+async function checkPlugins(located) {
+  if (located.root === undefined) throw new Error(located.error)
+  const result = await runCommand(join(located.root, 'bin', 'dsh-plugins.sh'), ['--check', '--json'], CHECK_TIMEOUT_MS)
+  const report = parseJson(result.stdout)
+  if (report === undefined) {
+    const detail = firstLine(result.stderr) || `exit ${result.code}`
+    throw new Error(`the plugin check produced no report (${detail})`)
+  }
+  return { ...report, exitCode: result.code }
+}
+
+/**
+ * Start one plugin update, for the same reason the harness update needs a unit:
+ * it ends by restarting this process.
+ * @param located - resolved checkout.
+ * @param log - diagnostic sink.
+ * @returns how the update was started, or that one was already running.
+ */
+async function startPluginsUpdate(located, log) {
+  if (located.root === undefined) throw new Error(located.error)
+  const running = await readJsonFile(join(located.root, 'harness', 'state', 'plugins.json'))
+  if (running !== null && running.state === 'running' && isAlive(running.pid)) {
+    return { started: false, alreadyRunning: true, run: running }
+  }
+
+  const unit = await runCommand('systemctl', ['--user', 'start', '--no-block', PLUGINS_UNIT], SYSTEMCTL_TIMEOUT_MS)
+  if (unit.ok) return { started: true, via: 'systemd', unit: PLUGINS_UNIT }
+
+  const script = join(located.root, 'bin', 'dsh-plugins.sh')
+  const child = spawn(script, ['--update'], { detached: true, stdio: 'ignore', cwd: located.root })
+  child.on('error', (error) => {
+    log('warn', `detached plugin update failed to start: ${error.message}`)
+  })
+  child.unref()
+  const reason = firstLine(unit.stderr) || `exit ${unit.code}`
+  log('warn', `systemd would not start ${PLUGINS_UNIT} (${reason}); ran the plugin updater detached instead`)
+  return {
+    started: true,
+    via: 'detached',
+    warning: `systemd would not run ${PLUGINS_UNIT} (${reason}). The plugin update is running detached: it pulls and deploys, but the restart at the end may need to be done by hand.`,
   }
 }
 
@@ -380,11 +466,23 @@ async function installInfo(refFile) {
 
 /** The progress record `dsh-sync.sh` leaves behind, or null when there is none. */
 async function readRun(root) {
+  return readJsonFile(join(root, 'harness', 'state', 'update.json'))
+}
+
+/** One JSON file, or null when it is missing or malformed. */
+async function readJsonFile(path) {
   try {
-    return parseJson(await readFile(join(root, 'harness', 'state', 'update.json'), 'utf8')) ?? null
+    return parseJson(await readFile(path, 'utf8')) ?? null
   } catch {
     return null
   }
+}
+
+/** How many log lines a caller asked for, clamped. */
+function tailLines(payload, fallback) {
+  const lines = payload === null || payload === undefined ? undefined : payload.lines
+  if (typeof lines !== 'number' || !Number.isFinite(lines) || lines <= 0) return fallback
+  return Math.min(lines, 500)
 }
 
 /**

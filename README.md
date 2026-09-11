@@ -5,9 +5,9 @@ deployment: what release is installed, one button to ask the channel whether
 there is something newer, one to install it, and a switch for a nightly sync.
 
 It is a DSH plugin with both halves — a Host half that runs the deployment's own
-updater and a browser half that draws the page — and it lives in its own
-repository because it is the *page*; the update pipeline it drives belongs to
-dsh-ops (`bin/dsh-sync.sh`, `dsh-update.service`, `dsh-ops.conf`).
+updaters and a browser half that draws the page — and it lives in its own
+repository because it is the *page*; the pipelines it drives belong to dsh-ops
+(`bin/dsh-sync.sh`, `bin/dsh-plugins.sh`, and the two systemd units).
 
 ## Install
 
@@ -25,8 +25,9 @@ Then reload the GUI and open **Settings → Updates**. The row that mounts it li
 in dsh-ops' `harness/cordis.patch.web.yml`; it is the only thing dsh-ops needs to
 know about this package.
 
-Requirements: a dsh-ops checkout whose `bin/dsh-sync.sh` understands `--check`
-(anything after the commit that added it), and `dsh-update.service` installed.
+Requirements: a dsh-ops checkout whose `bin/dsh-sync.sh` and
+`bin/dsh-plugins.sh` understand `--check`, plus `dsh-update.service` and
+`dsh-plugins.service` installed (both come from `bin/dsh-install-assets.sh`).
 
 ## What the page does
 
@@ -41,6 +42,23 @@ Requirements: a dsh-ops checkout whose `bin/dsh-sync.sh` understands `--check`
   `dsh-ops.conf` and enables/disables `dsh-update.timer`, so the choice survives
   later updates instead of being reverted by the next one.
 
+### The Plugins card
+
+dsh-ops installs its plugins from a manifest, not from code in the repository:
+`plugins.conf` (plus the machine-local `plugins.local.conf`) names plugin
+repositories, and `bin/dsh-plugins.sh` checks them out into the git-ignored
+`plugins/`. That card drives the same script:
+
+* **Check plugins** — asks each checkout's remote whether it is behind
+  (`git ls-remote`; nothing is fetched, cloned or pulled).
+* **Update plugins** — starts `dsh-plugins.service`: fast-forward each checkout,
+  refresh the profile layer, restart the harness. A checkout with local changes
+  is reported and left alone, and a run that changes nothing does not restart
+  anything.
+* Each entry shows the manifest it came from, the commit it is on, and where its
+  remote is, so an unmanaged checkout (no origin) says so instead of looking
+  current.
+
 ## How the halves talk
 
 One exact `/api` route (`ctx.connection.fetch.register`), POSTed to as
@@ -51,7 +69,8 @@ the signed browser cookie are applied **before** the handler runs. A route
 registered directly on `ctx.webServer` gets neither, which is not something to
 put in front of "install a release".
 
-Endpoints: `status`, `check`, `progress`, `update`, `auto`.
+Endpoints: `status`, `check`, `progress`, `update`, `auto` for the harness, and
+`plugins`, `pluginsCheck`, `pluginsUpdate` for the manifest.
 
 ## Where the checkout is
 

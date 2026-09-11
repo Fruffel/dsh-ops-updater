@@ -433,7 +433,7 @@ window.__ModuleLoader__.load({
 							pluginReport === null
 								? "check to see what the manifest installs"
 								: `${pluginEntries.length} declared`),
-						React.createElement("span", { style: styles.hint }, "· one repository per line in plugins.conf")),
+						React.createElement("span", { style: styles.hint }, "· from plugins.conf and the machine-local plugins.local.conf")),
 					pluginEntries.length === 0
 						? null
 						: React.createElement("div", { style: styles.list },

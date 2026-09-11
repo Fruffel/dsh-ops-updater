@@ -45,9 +45,9 @@ Requirements: a dsh-ops checkout whose `bin/dsh-sync.sh` and
 ### The Plugins card
 
 dsh-ops installs its plugins from a manifest, not from code in the repository:
-`plugins.conf` (machine-local, seeded from the tracked `plugins.conf.example`)
-names plugin repositories, and `bin/dsh-plugins.sh` checks them out into the
-git-ignored `plugins/`. That card drives the same script:
+`plugins.conf` (plus the machine-local `plugins.local.conf`) names plugin
+repositories, and `bin/dsh-plugins.sh` checks them out into the git-ignored
+`plugins/`. That card drives the same script:
 
 * **Check plugins** — asks each checkout's remote whether it is behind
   (`git ls-remote`; nothing is fetched, cloned or pulled).
@@ -55,8 +55,9 @@ git-ignored `plugins/`. That card drives the same script:
   refresh the profile layer, restart the harness. A checkout with local changes
   is reported and left alone, and a run that changes nothing does not restart
   anything.
-* Each entry shows the commit it is on and where its remote is, so an unmanaged
-  checkout (no origin) says so instead of looking current.
+* Each entry shows the manifest it came from, the commit it is on, and where its
+  remote is, so an unmanaged checkout (no origin) says so instead of looking
+  current.
 
 ## How the halves talk
 

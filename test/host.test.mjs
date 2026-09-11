@@ -282,6 +282,29 @@ describe('dsh-ops-updater host half', () => {
     assert.equal(state.log, 'dsh-plugins: 1 plugin(s) already current')
   })
 
+  it('reports a run whose process is gone as interrupted, not running', async () => {
+    const file = join(root, 'harness', 'state', 'plugins.json')
+    const record = JSON.parse(readFileSync(file, 'utf8'))
+    // The shape dsh-plugins.service leaves behind when its own final phase
+    // restarts the harness: still "running", with the writer now dead.
+    writeFileSync(file, JSON.stringify({ ...record, state: 'running', pid: 999999999, finishedAt: null }), 'utf8')
+    const call = mount(root)
+    const state = value(await call('plugins', { lines: 1 }))
+    assert.equal(state.run.state, 'interrupted')
+    assert.equal(state.run.interrupted, true)
+    writeFileSync(file, JSON.stringify(record), 'utf8')
+  })
+
+  it('leaves a genuinely running run reported as running', async () => {
+    const file = join(root, 'harness', 'state', 'plugins.json')
+    const record = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...record, state: 'running', pid: process.pid }), 'utf8')
+    const call = mount(root)
+    const state = value(await call('plugins', { lines: 1 }))
+    assert.equal(state.run.state, 'running')
+    assert.equal(state.run.interrupted, undefined)
+    writeFileSync(file, JSON.stringify(record), 'utf8')
+  })
   it('answers the plugin check from the script it runs, verbatim', async () => {
     const call = mount(root)
     const report = value(await call('pluginsCheck', {}))

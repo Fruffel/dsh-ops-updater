@@ -323,6 +323,24 @@ async function readProgress(located, payload) {
  * @returns the last run record and log tail, plus the manifest's own report
  *   when a check has already been made in this process.
  */
+
+/**
+ * A run record that still says "running" while its process is gone is a run
+ * that never got to write its own ending: `dsh-plugins.service` restarts this
+ * harness as its final phase, and that restart kills the writer before it can
+ * record `finishedAt`. Such a record is reported as `interrupted` instead of
+ * `running`, because the browser disables both card buttons while a run looks
+ * live — a record that can never finish would otherwise disable the Plugins
+ * card for good.
+ * @param run - the parsed state file, or null when there is none.
+ * @returns the record with a dead "running" claim settled, otherwise as-is.
+ */
+function settleRun(run) {
+  if (run === null || typeof run !== 'object') return run
+  if (run.state !== 'running' || isAlive(run.pid)) return run
+  return { ...run, state: 'interrupted', interrupted: true }
+}
+
 async function readPluginState(located, payload) {
   if (located.root === undefined) {
     return { found: false, error: located.error, unit: PLUGINS_UNIT, run: null, log: '' }
@@ -333,7 +351,7 @@ async function readPluginState(located, payload) {
     script: join(located.root, 'bin', 'dsh-plugins.sh'),
     manifest: join(located.root, 'plugins.conf'),
     unit: PLUGINS_UNIT,
-    run: await readJsonFile(join(located.root, 'harness', 'state', 'plugins.json')),
+    run: settleRun(await readJsonFile(join(located.root, 'harness', 'state', 'plugins.json'))),
     log: await tail(join(located.root, 'harness', 'state', 'plugins.log'), lines),
   }
 }

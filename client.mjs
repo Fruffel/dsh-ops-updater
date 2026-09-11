@@ -328,6 +328,13 @@ window.__ModuleLoader__.load({
 			const pluginUpdateAvailable = pluginReport !== null && pluginReport.updateAvailable === true;
 			const pluginUnit = plugins === null || plugins === undefined ? "dsh-plugins.service" : plugins.unit ?? "dsh-plugins.service";
 			const pluginBusy = pluginPending !== "" || pluginRunning;
+			// "interrupted" is neither a success nor a failure: the harness restarted
+			// before the run could record its own finish, so it reads neutral.
+			const pluginRunStyle = pluginRun === null || pluginRun === undefined ? styles.good
+				: pluginRun.state === "failed" ? styles.error
+				: pluginRun.state === "running" ? styles.status
+				: pluginRun.state === "interrupted" ? styles.hint
+				: styles.good;
 			const pluginLine = () => {
 				if (pluginReport === null) return null;
 				if (pluginReport.ok !== true) {
@@ -463,10 +470,13 @@ window.__ModuleLoader__.load({
 					pluginRun === null || pluginRun === undefined ? null : React.createElement("div", { style: { ...styles.card, gap: "0.5rem", border: "none", padding: 0 } },
 						React.createElement("div", { style: styles.row },
 							React.createElement("span", { style: styles.key }, "Last plugin run"),
-							React.createElement("span", { style: pluginRun.state === "failed" ? styles.error : pluginRun.state === "running" ? styles.status : styles.good },
+							React.createElement("span", { style: pluginRunStyle },
 								`${pluginRun.state}${pluginRun.phase === undefined ? "" : ` — ${pluginRun.phase}`}`,
 								pluginRun.message === undefined ? "" : `: ${pluginRun.message}`),
-							pluginRestarting ? React.createElement("span", { style: styles.hint }, "waiting for the harness to come back…") : null),
+				pluginRun.interrupted === true
+					? React.createElement("span", { style: styles.hint }, "the harness restarted before this run could record its finish — nothing is running now")
+					: null,
+				pluginRestarting ? React.createElement("span", { style: styles.hint }, "waiting for the harness to come back…") : null),
 						React.createElement("div", { style: styles.actions },
 							React.createElement("button", {
 								type: "button", style: styles.button,

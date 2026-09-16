@@ -202,6 +202,14 @@ describe('dsh-ops-updater client half', () => {
       CHANNELS,
     )
     assert.match(text, /alpha prereleases skipped/)
+    // The native popup paints its own surface, so the select and every option
+    // must carry the app's own theme colors: with a transparent background the
+    // page's light option text landed on a white menu.
+    assert.match(select.props.style.background, /var\(--dsw-alias-bg-layer-1/)
+    for (const option of elements(select).filter((element) => element.type === 'option')) {
+      assert.match(option.props.style.color, /var\(--dsw-alias-label-primary/)
+      assert.match(option.props.style.background, /var\(--dsw-alias-bg-layer-3/)
+    }
   })
 
   it('stays inert: one endpoint, no privileged module of its own', async () => {

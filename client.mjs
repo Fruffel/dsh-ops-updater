@@ -107,10 +107,15 @@ window.__ModuleLoader__.load({
 			primary: { fontWeight: 600, borderColor: "var(--dsh-accent, rgba(127,127,127,0.6))" },
 			busy: { opacity: 0.5, cursor: "default" },
 			select: {
-				padding: "0.25rem 0.4rem", borderRadius: "0.375rem",
-				border: "1px solid var(--dsh-border, rgba(127,127,127,0.35))",
-				background: "var(--dsh-button-bg, transparent)", color: "inherit",
+				padding: "0.25rem 0.5rem", borderRadius: "0.375rem",
+				border: "1px solid var(--dsw-alias-border-l4, rgba(127,127,127,0.35))",
+				background: "var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.12))",
+				color: "var(--dsw-alias-label-primary, inherit)",
 				font: "inherit", fontSize: "0.78rem",
+			},
+			option: {
+				background: "var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.18))",
+				color: "var(--dsw-alias-label-primary, inherit)",
 			},
 			status: { fontSize: "0.78rem", opacity: 0.8 },
 			good: { fontSize: "0.78rem", color: "var(--dsh-success, #3fa45b)" },
@@ -447,7 +452,7 @@ window.__ModuleLoader__.load({
 							disabled: busy,
 							onChange: (event) => { void chooseChannel(event.target.value) },
 						}, (CHANNELS.includes(status.channel) ? CHANNELS : [status.channel, ...CHANNELS]).map((name) =>
-							React.createElement("option", { key: name, value: name }, name))),
+							React.createElement("option", { key: name, value: name, style: styles.option }, name))),
 						React.createElement("span", { style: styles.hint }, `· ${CHANNEL_HINTS[status.channel] ?? "unknown channel — pick another"}`)),
 					React.createElement("div", { style: styles.actions },
 						React.createElement("button", {

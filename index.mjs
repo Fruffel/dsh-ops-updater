@@ -79,6 +79,14 @@ export const UPDATE_UNIT = 'dsh-update.service'
 export const AUTO_UNIT = 'dsh-update.timer'
 
 /**
+ * The channels `bin/dsh-sync.sh` understands, in the order the page offers
+ * them. The browser half declares the same list; a test keeps the two honest.
+ * `alpha` is the newest prerelease, `rc` skips prereleases, `stable` is plain
+ * `x.y.z`, and `latest` takes the newest tag of any kind.
+ */
+export const CHANNELS = ['stable', 'rc', 'alpha', 'latest']
+
+/**
  * The unit that updates the plugin checkouts. Same shape as the harness one:
  * it pulls each checkout, refreshes the profile layer, and restarts the harness
  * from its own cgroup.
@@ -158,6 +166,8 @@ async function dispatch(request, located, log) {
         return json(ok(await startUpdate(located, log)))
       case 'auto':
         return json(ok(await setAutoUpdate(located, body.payload, log)))
+      case 'channel':
+        return json(ok(await setChannel(located, body.payload)))
       case 'plugins':
         return json(ok(await readPluginState(located, body.payload)))
       case 'pluginsCheck':
@@ -440,6 +450,26 @@ async function startUpdate(located, log) {
     via: 'detached',
     warning: `systemd would not run ${UPDATE_UNIT} (${reason}). The update is running detached: it builds and deploys, but the restart at the end may need to be done by hand.`,
   }
+}
+
+/**
+ * Switch the channel this machine follows, through the same file the timer, the
+ * update unit and a terminal read (`DSH_UPDATE_CHANNEL` in dsh-ops.conf). The
+ * value is checked against the channels `bin/dsh-sync.sh` accepts before it is
+ * written, so a typo cannot turn into "unknown channel" on the next run — and
+ * so nothing from the browser reaches the conf unchecked.
+ * @param located - resolved checkout.
+ * @param payload - `{ channel }`.
+ * @returns the channel now in effect.
+ */
+async function setChannel(located, payload) {
+  if (located.root === undefined) throw new Error(located.error)
+  const channel = typeof payload?.channel === 'string' ? payload.channel.trim() : ''
+  if (!CHANNELS.includes(channel)) {
+    throw new Error(`unknown channel "${channel}" — expected one of ${CHANNELS.join(', ')}`)
+  }
+  await writeConfKey(located.root, 'DSH_UPDATE_CHANNEL', channel)
+  return { channel }
 }
 
 /**

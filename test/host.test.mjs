@@ -266,6 +266,41 @@ describe('dsh-ops-updater host half', () => {
     assert.match(readFileSync(join(root, 'dsh-ops.conf'), 'utf8'), /^DSH_AUTO_UPDATE=1$/m)
   })
 
+  it('follows the channel the page selects, through dsh-ops.conf', async () => {
+    writeFileSync(join(root, 'dsh-ops.conf'), '# machine-local settings\nDSH_PORT=3080\nDSH_UPDATE_CHANNEL=rc\n', 'utf8')
+    const call = mount(root)
+    const switched = value(await call('channel', { channel: 'alpha' }))
+    assert.equal(switched.channel, 'alpha')
+    const conf = readFileSync(join(root, 'dsh-ops.conf'), 'utf8')
+    assert.match(conf, /^DSH_UPDATE_CHANNEL=alpha$/m)
+    // Everything else in the file survives the edit, comments included.
+    assert.match(conf, /^# machine-local settings$/m)
+    assert.match(conf, /^DSH_PORT=3080$/m)
+    // The next status read reports the channel now in effect.
+    assert.equal(value(await call('status', {})).channel, 'alpha')
+    // Leave the fixture as later tests expect it.
+    value(await call('channel', { channel: 'stable' }))
+    assert.match(readFileSync(join(root, 'dsh-ops.conf'), 'utf8'), /^DSH_UPDATE_CHANNEL=stable$/m)
+  })
+
+  it('appends the channel when the conf does not carry it yet', async () => {
+    writeFileSync(join(root, 'dsh-ops.conf'), 'DSH_PORT=3080\n', 'utf8')
+    const call = mount(root)
+    value(await call('channel', { channel: 'alpha' }))
+    assert.match(readFileSync(join(root, 'dsh-ops.conf'), 'utf8'), /^DSH_UPDATE_CHANNEL=alpha$/m)
+  })
+
+  it('refuses a channel the updater does not know, and writes nothing', async () => {
+    writeFileSync(join(root, 'dsh-ops.conf'), 'DSH_UPDATE_CHANNEL=rc\n', 'utf8')
+    const call = mount(root)
+    for (const bogus of ['nonsense', '', 'rc\nalpha', undefined]) {
+      const answer = await call('channel', { channel: bogus })
+      assert.equal(answer.ok, false, `expected ${String(bogus)} to be refused`)
+      assert.match(answer.error.message, /unknown channel/)
+    }
+    assert.match(readFileSync(join(root, 'dsh-ops.conf'), 'utf8'), /^DSH_UPDATE_CHANNEL=rc$/m)
+  })
+
   it('fails loudly for an unknown endpoint', async () => {
     const call = mount(root)
     const answer = await call('nonsense', {})

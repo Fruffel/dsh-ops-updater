@@ -32,7 +32,13 @@ Requirements: a dsh-ops checkout whose `bin/dsh-sync.sh` and
 ## What the page does
 
 * **Installed** — the release `harness/current-ref` names, and when it landed.
-* **Channel** — `DSH_UPDATE_CHANNEL` from `dsh-ops.conf` (`rc`, `stable`, `latest`).
+* **Channel** — a selector for what this machine follows, written to
+  `DSH_UPDATE_CHANNEL` in `dsh-ops.conf` so the page, the nightly timer and a
+  terminal cannot disagree. `rc` skips alpha prereleases, `alpha` follows the
+  newest `x.y.z-alpha.n`, `stable` takes plain `x.y.z`, and `latest` takes the
+  newest tag of any kind. Switching re-runs the check immediately. The
+  `alpha` choice needs a dsh-ops whose `bin/dsh-sync.sh` knows that channel;
+  an older checkout answers the next check with `unknown channel: alpha`.
 * **Check for updates** — runs `bin/dsh-sync.sh --check --json`. It fetches tags
   and compares; it builds and restarts nothing.
 * **Install `<tag>`** — starts `dsh-update.service`: build → smoke test on an
@@ -69,7 +75,8 @@ the signed browser cookie are applied **before** the handler runs. A route
 registered directly on `ctx.webServer` gets neither, which is not something to
 put in front of "install a release".
 
-Endpoints: `status`, `check`, `progress`, `update`, `auto` for the harness, and
+Endpoints: `status`, `check`, `progress`, `update`, `auto`, `channel` for the
+harness, and
 `plugins`, `pluginsCheck`, `pluginsUpdate` for the manifest.
 
 ## Where the checkout is

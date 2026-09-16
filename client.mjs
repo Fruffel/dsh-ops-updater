@@ -31,6 +31,18 @@ window.__ModuleLoader__.load({
 		const SLOT = "settings.section";
 		/** How often the page asks for progress while an update runs. */
 		const POLL_MS = 2000;
+		/**
+		 * The channels the selector offers, in the order the Host accepts them.
+		 * `index.mjs` exports the same list; a test keeps the two honest.
+		 */
+		const CHANNELS = ["stable", "rc", "alpha", "latest"];
+		/** What each channel follows, shown beside the selector. */
+		const CHANNEL_HINTS = {
+			stable: "plain x.y.z releases only",
+			rc: "newest tag, alpha prereleases skipped",
+			alpha: "newest x.y.z-alpha.n prerelease",
+			latest: "newest tag of any kind, alphas included",
+		};
 
 		/**
 		 * Call one endpoint, unwrapping the Host's own result shape. An HTTP
@@ -94,6 +106,12 @@ window.__ModuleLoader__.load({
 			},
 			primary: { fontWeight: 600, borderColor: "var(--dsh-accent, rgba(127,127,127,0.6))" },
 			busy: { opacity: 0.5, cursor: "default" },
+			select: {
+				padding: "0.25rem 0.4rem", borderRadius: "0.375rem",
+				border: "1px solid var(--dsh-border, rgba(127,127,127,0.35))",
+				background: "var(--dsh-button-bg, transparent)", color: "inherit",
+				font: "inherit", fontSize: "0.78rem",
+			},
 			status: { fontSize: "0.78rem", opacity: 0.8 },
 			good: { fontSize: "0.78rem", color: "var(--dsh-success, #3fa45b)" },
 			error: { fontSize: "0.78rem", color: "var(--dsh-danger, #d9534f)" },
@@ -287,6 +305,20 @@ window.__ModuleLoader__.load({
 				if (value.error !== null && value.error !== undefined) setFailure(value.error);
 			});
 
+			// Switching channels re-checks immediately: the report on screen was
+			// resolved against the old channel, so showing it beside the new one
+			// would claim the wrong release is next. The write goes to dsh-ops.conf,
+			// which is also what the timer and a terminal read.
+			const chooseChannel = (next) => act("channel", async () => {
+				if (next === status.channel) return;
+				const value = await call("channel", { channel: next });
+				setStatus((current) => current === null ? current : { ...current, channel: value.channel });
+				setReport(null);
+				setNotice(`Now following the ${value.channel} channel — checking it now.`);
+				const checked = await call("check", {});
+				setReport(checked);
+			});
+
 			const checkPlugins = () => act("plugins-check", async () => {
 				const value = await call("pluginsCheck", {});
 				setPlugins((current) => ({ ...(current ?? {}), report: value }));
@@ -409,8 +441,14 @@ window.__ModuleLoader__.load({
 						React.createElement("span", { style: styles.hint }, status.installedAt === null ? "" : `· ${when(status.installedAt)}`)),
 					React.createElement("div", { style: styles.row },
 						React.createElement("span", { style: styles.key }, "Channel"),
-						React.createElement("span", { style: { ...styles.value, ...styles.mono } }, status.channel),
-						React.createElement("span", { style: styles.hint }, "· newest tag on this channel, alpha excluded unless the channel is latest")),
+						React.createElement("select", {
+							style: styles.select,
+							value: status.channel,
+							disabled: busy,
+							onChange: (event) => { void chooseChannel(event.target.value) },
+						}, (CHANNELS.includes(status.channel) ? CHANNELS : [status.channel, ...CHANNELS]).map((name) =>
+							React.createElement("option", { key: name, value: name }, name))),
+						React.createElement("span", { style: styles.hint }, `· ${CHANNEL_HINTS[status.channel] ?? "unknown channel — pick another"}`)),
 					React.createElement("div", { style: styles.actions },
 						React.createElement("button", {
 							type: "button", style: buttonStyle(), disabled: busy, onClick: check,

@@ -4,8 +4,8 @@
  * The browser half is a bundle, not a module: it registers a factory through
  * `window.__ModuleLoader__`. These tests stand in for that loader and for
  * React, so the page can be exercised in Node — its structure, the slot it
- * registers, the text it shows in each state, and the one value the two halves
- * have to agree on: the `/api` route path.
+ * registers, the text it shows in each state, and the values the two halves
+ * have to agree on: the `/api` route path and the channels the page offers.
  *
  * run: node --test plugins/dsh-ops-updater/test/
  */
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { ROUTE_PATH } from '../index.mjs'
+import { CHANNELS, ROUTE_PATH } from '../index.mjs'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 
@@ -49,11 +49,21 @@ async function loadBundle() {
   return bundleRegistration
 }
 
+/**
+ * Initial values a test queues for the page's `useState` calls, in hook order.
+ * The real page fills its state from effects, which this stand-in does not run,
+ * so a test that wants the loaded page seeds that state instead.
+ */
+let queuedState = [];
+
 /** The smallest React that can run this page's render path. */
 const react = {
   Fragment: Symbol('Fragment'),
   createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
-  useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+  useState: (initial) => [
+    queuedState.length > 0 ? queuedState.shift() : (typeof initial === 'function' ? initial() : initial),
+    () => {},
+  ],
   useEffect: () => {},
   useCallback: (fn) => fn,
   useRef: (value) => ({ current: value }),
@@ -85,8 +95,40 @@ function textOf(node) {
   return textOf(node.children)
 }
 
-/** Render the registered page once and return its text. */
-function render(plugin, props = {}) {
+/** Every element node in a rendered tree, function components invoked. */
+function elements(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out
+  if (typeof node === 'string' || typeof node === 'number') return out
+  if (Array.isArray(node)) {
+    for (const child of node) elements(child, out)
+    return out
+  }
+  if (typeof node.type === 'function') {
+    elements(node.type({ ...node.props, children: node.children }), out)
+    return out
+  }
+  out.push(node)
+  elements(node.children, out)
+  return out
+}
+/**
+ * Replace every function component in a tree with the element it returns, so
+ * the result can be inspected after the state queue is gone.
+ */
+function expand(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return node
+  if (typeof node === 'string' || typeof node === 'number') return node
+  if (Array.isArray(node)) return node.map(expand)
+  if (typeof node.type === 'function') return expand(node.type({ ...node.props, children: node.children }))
+  return { ...node, children: node.children.map(expand) }
+}
+
+/**
+ * Render the registered page once and return its tree and text. `state` seeds
+ * the page's `useState` calls; with none, the page renders its first paint.
+ */
+function render(plugin, props = {}, state = []) {
+  queuedState = state.slice()
   let registered
   const ctx = {
     slots: {
@@ -94,10 +136,14 @@ function render(plugin, props = {}) {
       register: (options, component) => { registered = { options, component } },
     },
   }
-  plugin.apply(ctx)
-  assert.ok(registered !== undefined, 'apply must register the Updates section')
-  const tree = registered.component(props)
-  return { options: registered.options, text: textOf(tree) }
+  try {
+    plugin.apply(ctx)
+    assert.ok(registered !== undefined, 'apply must register the Updates section')
+    const tree = expand(registered.component(props))
+    return { options: registered.options, tree, text: textOf(tree) }
+  } finally {
+    queuedState = []
+  }
 }
 
 describe('dsh-ops-updater client half', () => {
@@ -125,6 +171,37 @@ describe('dsh-ops-updater client half', () => {
     const declared = /const ROUTE = "([^"]+)"/.exec(source)
     assert.ok(declared !== null, 'the client half must declare its route')
     assert.equal(declared[1], ROUTE_PATH)
+  })
+
+  it('agrees with the Host half about the channels it offers', async () => {
+    const source = readFileSync(join(HERE, '..', 'client.mjs'), 'utf8')
+    const declared = /const CHANNELS = (\[[^\]]+\])/.exec(source)
+    assert.ok(declared !== null, 'the client half must declare its channels')
+    assert.deepEqual(JSON.parse(declared[1]), CHANNELS)
+  })
+
+  it('offers every channel on the loaded page, with the current one selected', async () => {
+    const plugin = materialise(await loadBundle())
+    const status = {
+      found: true,
+      root: '/tmp/dsh-ops',
+      current: 'dsh-v0.1.5-rc.2',
+      installedAt: '2026-01-02T03:04:05Z',
+      channel: 'rc',
+      autoUpdate: false,
+      timer: 'disabled',
+      run: null,
+      unit: 'dsh-update.service',
+    }
+    const { tree, text } = render(plugin, {}, [status])
+    const select = elements(tree).find((element) => element.type === 'select')
+    assert.ok(select !== undefined, 'the loaded page must draw a channel selector')
+    assert.equal(select.props.value, 'rc')
+    assert.deepEqual(
+      elements(select).filter((element) => element.type === 'option').map((option) => option.props.value),
+      CHANNELS,
+    )
+    assert.match(text, /alpha prereleases skipped/)
   })
 
   it('stays inert: one endpoint, no privileged module of its own', async () => {

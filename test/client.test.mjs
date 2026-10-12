@@ -212,6 +212,27 @@ describe('dsh-ops-updater client half', () => {
     }
   })
 
+  it('draws only the release card: the plugin half of the page is gone', async () => {
+    const plugin = materialise(await loadBundle())
+    const status = {
+      found: true,
+      root: '/tmp/dsh-ops',
+      current: 'dsh-v0.1.5-rc.2',
+      installedAt: '2026-01-02T03:04:05Z',
+      channel: 'rc',
+      autoUpdate: false,
+      timer: 'disabled',
+      run: null,
+      unit: 'dsh-update.service',
+    }
+    const { text } = render(plugin, {}, [status])
+    assert.match(text, /Check for updates/)
+    // dsh-ops no longer ships a Plugins card: the harness's own plugin manager
+    // owns plugins other than the updater, and this page must not offer a second
+    // way to install them.
+    assert.doesNotMatch(text, /Check plugins|Update plugins|plugins\.conf|plugins\.local\.conf/)
+  })
+
   it('stays inert: one endpoint, no privileged module of its own', async () => {
     const source = readFileSync(join(HERE, '..', 'client.mjs'), 'utf8')
     // This bundle is served off /plugins, which carries no fence, so it must
